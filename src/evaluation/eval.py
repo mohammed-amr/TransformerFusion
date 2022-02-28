@@ -106,6 +106,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--groundtruth_dir', action='store', dest='groundtruth_dir', default='./data/groundtruth', help='Provide root directory of ground truth data')
     parser.add_argument('--prediction_dir', action='store', dest='prediction_dir', default='./data/reconstructions', help='Provide root directory of prediction data')
+    parser.add_argument('--single_scene', type=str, default=None)
 
     args = parser.parse_args()
 
@@ -130,11 +131,18 @@ def main():
     chamfer_dist = ChamferDistance()
 
     scene_ids = sorted(os.listdir(groundtruth_dir))
+    print(args.single_scene)
+    if args.single_scene is not None: 
+        scene_ids = [args.single_scene]
     
     for scene_id in tqdm(scene_ids):
         # Load predicted mesh.
         missing_scene = False
-        mesh_pred_path = os.path.join(prediction_dir, "{}.ply".format(scene_id))
+
+        mesh_pred_path = prediction_dir.replace("SCAN_NAME", scene_id)
+
+        # mesh_pred_path = os.path.join(prediction_dir, "{}.ply".format(scene_id))
+
         if not os.path.exists(mesh_pred_path):
             # We have no extracted geometry, so we use default metrics for missing scene.
             missing_scene = True
