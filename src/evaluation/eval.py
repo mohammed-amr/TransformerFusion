@@ -105,8 +105,8 @@ def main():
     #####################################################################################
     parser = argparse.ArgumentParser()
     parser.add_argument('--groundtruth_dir', action='store', dest='groundtruth_dir', default='./data/groundtruth', help='Provide root directory of ground truth data')
-    parser.add_argument('--prediction_dir', action='store', dest='prediction_dir', default='./data/reconstructions', help='Provide root directory of prediction data')
-    parser.add_argument('--single_scene', type=str, default=None)
+    parser.add_argument('--prediction_dir', action='store', dest='prediction_dir', default='./data/reconstructions', help='Provide root directory and file format of prediction data. SCAN_NAME will be replaced with the scan name.')
+    parser.add_argument('--single_scene', type=str, default=None, help='Optional flag to eval only one scan.')
 
     args = parser.parse_args()
 
