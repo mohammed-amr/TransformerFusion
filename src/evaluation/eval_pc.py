@@ -107,11 +107,14 @@ def main():
     parser.add_argument('--groundtruth_dir', action='store', dest='groundtruth_dir', default='./data/groundtruth', help='Provide root directory of ground truth data')
     parser.add_argument('--prediction_dir', action='store', dest='prediction_dir', default='./data/reconstructions', help='Provide root directory and file format of prediction data. SCAN_NAME will be replaced with the scan name.')
     parser.add_argument('--single_scene', type=str, default=None, help='Optional flag to eval only one scan.')
+    parser.add_argument('--prediction_dir_pc', action='store', dest='prediction_dir_pc', default='./data/reconstructions', help='Provide root directory and file format of prediction data. SCAN_NAME will be replaced with the scan name.')
+    parser.add_argument('--pc_eval', action='store_true')
 
     args = parser.parse_args()
 
     groundtruth_dir = args.groundtruth_dir
     prediction_dir = args.prediction_dir
+    prediction_dir_pc = args.prediction_dir_pc 
     assert os.path.exists(groundtruth_dir)
 
     #####################################################################################
@@ -139,24 +142,42 @@ def main():
         # Load predicted mesh.
         missing_scene = False
 
-        mesh_pred_path = prediction_dir.replace("SCAN_NAME", scene_id)
+        mesh_pred_path = None
+        pc_pred_path = None
 
-        # mesh_pred_path = os.path.join(prediction_dir, "{}.ply".format(scene_id))
-
-        if not os.path.exists(mesh_pred_path):
-            # We have no extracted geometry, so we use default metrics for missing scene.
-            missing_scene = True
-
-        else:
-            mesh_pred = o3d.io.read_triangle_mesh(mesh_pred_path)
-            if np.asarray(mesh_pred.vertices).shape[0] <= 0 or np.asarray(mesh_pred.triangles).shape[0] <= 0:
-                # No vertices or faces present.
+        if args.pc_eval:
+            pc_pred_path = prediction_dir_pc.replace("SCAN_NAME", scene_id)
+            if not os.path.exists(pc_pred_path):
+                # We have no extracted geometry, so we use default metrics for missing scene.
                 missing_scene = True
+
+            else:
+                pcd_pred = o3d.io.read_point_cloud(pc_pred_path)
+                points_pred = np.asarray(pcd_pred.points)
+                if points_pred.shape[0] <= 0:
+                    # No vertices or faces present.
+                    missing_scene = True
+                
+        else:
+            mesh_pred_path = prediction_dir.replace("SCAN_NAME", scene_id)
+            if not os.path.exists(mesh_pred_path):
+                # We have no extracted geometry, so we use default metrics for missing scene.
+                missing_scene = True
+
+            else:
+                mesh_pred = o3d.io.read_triangle_mesh(mesh_pred_path)
+                if np.asarray(mesh_pred.vertices).shape[0] <= 0 or np.asarray(mesh_pred.triangles).shape[0] <= 0:
+                    # No vertices or faces present.
+                    missing_scene = True
+
+                pcd_pred = mesh_pred.sample_points_uniformly(number_of_points=num_points_samples)
+                points_pred = np.asarray(pcd_pred.points)
+
 
         # If no result is present for the scene, we use the maximum errors.
         if missing_scene:
             # We use default metrics for missing scene.
-            print("Missing scene reconstruction: {0}".format(mesh_pred_path))
+            print("Missing scene reconstruction: {0} {1}".format(mesh_pred_path,pc_pred_path))
             acc_sum += max_dist
             compl_sum += max_dist
             chamfer_sum += max_dist
@@ -170,13 +191,19 @@ def main():
         # Load groundtruth mesh.
         mesh_gt_path = os.path.join(groundtruth_dir, scene_id, "mesh_gt.ply".format(scene_id))
 
-        mesh_gt = o3d.io.read_triangle_mesh(mesh_gt_path)
-        points_gt = np.asarray(mesh_gt.vertices)
+        
+
+
+        if args.pc_eval:
+            pcd_gt = o3d.io.read_point_cloud(mesh_gt_path)
+            points_gt = pcd_gt.voxel_down_sample(0.02)
+            points_gt = np.asarray(pcd_gt.points)
+        else:
+            mesh_gt = o3d.io.read_triangle_mesh(mesh_gt_path)
+            points_gt = np.asarray(mesh_gt.vertices)
 
         # To have a fair comparison even in the case of different mesh resolutions,
         # we always sample consistent amount of points on predicted mesh.
-        pcd_pred = mesh_pred.sample_points_uniformly(number_of_points=num_points_samples, seed=0)
-        points_pred = np.asarray(pcd_pred.points)
 
         # Load occlusion mask grid, with world2grid transform.
         occlusion_mask_path = os.path.join(groundtruth_dir, scene_id, "occlusion_mask.npy")
