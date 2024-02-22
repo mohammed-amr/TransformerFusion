@@ -10,8 +10,6 @@ from tqdm import tqdm
 import open3d as o3d
 import json
 
-from nnutils.chamfer_distance import ChamferDistance 
-
 
 def visualize_occlusion_mask(occlusion_mask, world2grid):
     dim_x = occlusion_mask.shape[0]
@@ -109,6 +107,7 @@ def main():
     parser.add_argument('--groundtruth_dir', action='store', dest='groundtruth_dir', default='./data/groundtruth', help='Provide root directory of ground truth data')
     parser.add_argument('--prediction_dir', action='store', dest='prediction_dir', default='./data/reconstructions', help='Provide root directory and file format of prediction data. SCAN_NAME will be replaced with the scan name.')
     parser.add_argument('--single_scene', type=str, default=None, help='Optional flag to eval only one scan.')
+    parser.add_argument('--wait_for_scan', action="store_true", help='Wait for scan to be available in the directory')
 
     args = parser.parse_args()
 
@@ -129,9 +128,7 @@ def main():
 
     total_num_scenes = 0
     scene_scores = OrderedDict()
-
-    chamfer_dist = ChamferDistance()
-
+    
     scene_ids = sorted(os.listdir(groundtruth_dir))
     print(args.single_scene)
     if args.single_scene is not None: 
@@ -145,8 +142,14 @@ def main():
 
         # mesh_pred_path = os.path.join(prediction_dir, "{}.ply".format(scene_id))
 
+        if args.wait_for_scan:
+            while not os.path.exists(mesh_pred_path):
+                time.sleep(30)
+                print(f"Waiting for scan {scene_id} to be available in the directory")
+        
         if not os.path.exists(mesh_pred_path):
             # We have no extracted geometry, so we use default metrics for missing scene.
+            
             missing_scene = True
 
         else:
@@ -171,14 +174,14 @@ def main():
 
         # Load groundtruth mesh.
         mesh_gt_path = os.path.join(groundtruth_dir, scene_id, "mesh_gt.ply".format(scene_id))
-
         mesh_gt = o3d.io.read_triangle_mesh(mesh_gt_path)
-        points_gt = np.asarray(mesh_gt.vertices)
-
+        gt_pcd = o3d.geometry.PointCloud()
+        gt_pcd.points = o3d.utility.Vector3dVector(np.asarray(mesh_gt.vertices))
+        
         # To have a fair comparison even in the case of different mesh resolutions,
         # we always sample consistent amount of points on predicted mesh.
         pcd_pred = mesh_pred.sample_points_uniformly(number_of_points=num_points_samples, seed=0)
-        points_pred = np.asarray(pcd_pred.points)
+        
 
         # Load occlusion mask grid, with world2grid transform.
         occlusion_mask_path = os.path.join(groundtruth_dir, scene_id, "occlusion_mask.npy")
@@ -188,32 +191,30 @@ def main():
         world2grid = np.loadtxt(world2grid_path)
 
         # Put data to device memory.
-        points_pred = torch.from_numpy(points_pred).float().cuda()
-        points_gt = torch.from_numpy(points_gt).float().cuda()
+        
         world2grid = torch.from_numpy(world2grid).float().cuda()
 
         # We keep occlusion mask on host memory, since it can be very large for big scenes.
         occlusion_mask = torch.from_numpy(occlusion_mask).float()
 
         # Compute gt -> predicted distance.
-        dist2_gt2pred, _ = chamfer_dist(points_gt.unsqueeze(0), points_pred.unsqueeze(0))
-    
-        dist_gt2pred = torch.sqrt(dist2_gt2pred)
-        dist_gt2pred[~torch.isfinite(dist_gt2pred)] = 0.0 # sqrt() operation is undefined for distance == 0
+        # move points_gt to open3d point cloud
 
+        dist_gt2pred = torch.tensor(gt_pcd.compute_point_cloud_distance(pcd_pred))
         dist_gt2pred = torch.minimum(dist_gt2pred, max_dist * torch.ones_like(dist_gt2pred))
 
         # Compute predicted -> gt distance.
         # All occluded predicted points should be masked out for , to not
         # penalize completion beyond groundtruth. 
+        points_pred = np.asarray(pcd_pred.points)
+        points_pred = torch.from_numpy(points_pred).float().cuda()
         points_pred_visible = filter_occluded_points(points_pred, world2grid, occlusion_mask)
 
         if points_pred_visible.shape[0] > 0:
-            dist2_pred2gt, _ = chamfer_dist(points_pred_visible.unsqueeze(0), points_gt.unsqueeze(0))
-        
-            dist_pred2gt = torch.sqrt(dist2_pred2gt)
-            dist_pred2gt[~torch.isfinite(dist_pred2gt)] = 0.0 # sqrt() operation is undefined for distance == 0
-
+            pred_pcd = o3d.geometry.PointCloud()
+            pred_pcd.points = o3d.utility.Vector3dVector(points_pred_visible.cpu().numpy())
+            
+            dist_pred2gt = torch.tensor(pred_pcd.compute_point_cloud_distance(gt_pcd))
             dist_pred2gt = torch.minimum(dist_pred2gt, max_dist * torch.ones_like(dist_pred2gt))
 
         # Geometry accuracy/completion/Chamfer.
@@ -237,13 +238,6 @@ def main():
             f1_score = 2 * prc * rec / (prc + rec)
         else:
             f1_score = 0.0
-
-        # print("acc =", acc)
-        # print("compl =", compl)
-        # print("chamfer =", chamfer)
-        # print("prc =", prc)
-        # print("rec =", rec)
-        # print("f1_score =", f1_score)
 
         # Update total metrics.
         acc_sum += acc
